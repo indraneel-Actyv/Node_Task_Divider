@@ -1,26 +1,56 @@
+const os = require('os')
 const { fork } = require('child_process')
-const { divide, join } = require('./strategies/sum')
+const StrategyManager = require('./strategies/index')
+const strategies = require('./strategies/strategies')
 
-const mainFunction = () => {
+const mainFunction = async (strategy, noOfChildProcess) => {
+  console.time('label')
+
   let finalResult = 0
-  const noOfChildProcess = 2
-  const dividedParts = divide({ maxNumber: 10601 }, noOfChildProcess)
-  const resultedParts = []
+  const cpus = os.cpus().length
 
-  dividedParts.forEach((each) => {
-    const compute = fork('./strategies/sum/child_process.js')
-    compute.send(each)
-    compute.on('message', (sum) => {
-      resultedParts.push(sum)
-    })
-  })
+  // Assigning a strategy
+  const strategyManager = new StrategyManager()
+  strategyManager.strategy = new strategies[strategy]()
 
-  if(resultedParts.length === noOfChildProcess) {
-    finalResult = join(resultedParts)
+  // Consoling the number of CPUs and processes
+  console.log('cpus', cpus)
+  console.log('noOfChildProcess', noOfChildProcess)
+
+  // Dividing the work in parts
+  const dividedParts = strategyManager.divide({ maxNumber: 100000000 }, noOfChildProcess)
+
+  // Allocating work among children
+  const resultedParts = dividedParts.map(
+    (each, index) =>
+      new Promise((resolve, reject) => {
+        // Creating a child
+        const child = fork('./child_process.js')
+
+        // Sending a message to child
+        child.send({ payload: each, index, strategy })
+        
+        // Receiving a message from child
+        child.on('message', (result) => {
+          console.log(result)
+          resolve(result)
+        })
+        
+        // handling the error from child
+        child.on('error', (code, signal) => reject(code))
+      })
+  )
+
+  // Joining the Parts to make it whole
+  if (resultedParts.length === dividedParts.length) {
+    const promisedResult = await Promise.all(resultedParts)
+    finalResult = strategyManager.join(promisedResult)
   }
 
   return finalResult
-
 }
 
-console.log(mainFunction())
+mainFunction('SummationStrategy', 4).then((result) => {
+  console.log('Final Result:', result)
+  console.timeEnd('label')
+})
